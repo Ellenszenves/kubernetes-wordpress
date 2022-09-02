@@ -1,2 +1,2 @@
 # kubernetes-wordpress
-Deploy wordpress with mariadb with kubernetes
+Deploy wordpress and mariadb image with kubernetes
