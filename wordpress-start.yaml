@@ -1,0 +1,170 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard    					           # Tetszőleges nevet adhatunk meg itt 
+provisioner: kubernetes.io/aws-ebs			 # AWS Elastic Block Storage
+parameters:
+  type: gp2								               # General Purpose SSD
+reclaimPolicy: Retain                    # https://kubernetes.io/docs/concepts/storage/storage-classes/#reclaim-policy
+allowVolumeExpansion: true               # Ennek a kapcsolónak a segítségével növelhető lesz a kötet mérete. Fontos: csak növelhető
+mountOptions:
+  - debug
+volumeBindingMode: WaitForFirstConsumer   
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pvc-wait 			   # Tetszőleges nevet adhatunk meg itt 
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi			   # A claim-ben határozzuk meg, hogy a kötet méretét is
+  storageClassName: standard    # Az előzőleg megadott StorageClass nevét kell itt megadni
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wordpress-c 			   # Tetszőleges nevet adhatunk meg itt 
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi			   # A claim-ben határozzuk meg, hogy a kötet méretét is
+  storageClassName: standard    # Az előzőleg megadott StorageClass nevét kell itt megadni
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-config                            
+data:
+  MYSQL_DATABASE: wordpress
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wordpress-config                           
+data:
+  WORDPRESS_DB_HOST: "127.0.0.1:3306"
+  WORDPRESS_DB_NAME: wordpress
+---
+apiVersion: v1
+kind: Secret
+type: Opaque
+metadata:
+  name: mysql-secret
+data:
+  username: d29yZHByZXNz                     # Fontos, ezek az értékek itt base64 encodinggal vannak letárolva
+  password: d29yZHByZXNz
+  rootpass: c29tZXdvcmRwcmVzcw== 
+---
+apiVersion: v1
+kind: Secret
+type: Opaque
+metadata:
+  name: wordpress-secret
+data:
+  username: d29yZHByZXNz                     # Fontos, ezek az értékek itt base64 encodinggal vannak letárolva
+  password: d29yZHByZXNz 
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress-teszt
+spec:
+  selector:
+    matchLabels:
+      app: wordpress-teszt                            # Ennek meg kell egyeznie (2)
+  template:
+    metadata:
+      labels:
+        app: wordpress-teszt                        # Ennek meg kell egyeznie (2)
+    spec:
+      volumes:  
+        - name: db-data 		                    # Ennek meg kell egyeznie (2)
+          persistentVolumeClaim:
+            claimName: pvc-wait
+        - name: wp-data 		                    # Ennek meg kell egyeznie (2)
+          persistentVolumeClaim:
+            claimName: wordpress-c
+      containers:
+        - image: mariadb
+          name: mariadb
+          volumeMounts:
+          - mountPath: /var/lib/mysql
+            name: db-data 	                    # Ennek meg kell egyeznie (2)
+            subPath: ./mysql-data
+          env:
+          - name: MYSQL_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mysql-secret
+                key: rootpass
+                optional: false
+          - name: MYSQL_DATABASE
+            valueFrom:
+              configMapKeyRef:
+                name: mysql-config
+                key: MYSQL_DATABASE
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                name: mysql-secret
+                key: username
+                optional: false
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: mysql-secret
+                key: password
+                optional: false                
+          ports:
+            - name: mysql-port
+              containerPort: 3306
+        - name: wordpress
+          image: wordpress
+          volumeMounts:
+          - mountPath: /var/www/html
+            name: wp-data 	                    # Ennek meg kell egyeznie (2)
+            subPath: ./wordpress-data
+          env:
+          - name: WORDPRESS_DB_HOST
+            value: "127.0.0.1:3306"
+          - name: WORDPRESS_DB_USER
+            valueFrom:
+              secretKeyRef:
+                name: wordpress-secret
+                key: username
+                optional: false
+          - name: WORDPRESS_DB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: wordpress-secret
+                key: password
+                optional: false
+          - name: WORDPRESS_DB_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: wordpress-config
+                key: WORDPRESS_DB_NAME
+          ports:
+            - name: wordpress-port
+              containerPort: 80                # Ennek meg kell egyeznie (4)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wordpress-service           # A service-ünk neve
+spec:
+  type: LoadBalancer            # Milyen formában szeretnénk expose-olni a service-ünket, erről bővebben később
+  selector:
+    app: wordpress-teszt                  # Ez alapján fogja leválogatni, hogy milyen POD-okat húzzon be maga alá
+  ports:
+    - name: wordpress-port
+      port: 80
+      targetPort: 80
+    - name: mysql-port
+      port: 3306
+      targetPort: mysql-port
